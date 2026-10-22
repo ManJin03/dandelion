@@ -12,7 +12,9 @@ build/
 *.exe
 *.out
 *.app
-
+dandelion-testset
+deps
+.idea
 # For IDEs / editors -----------------------------
 # Visual Studio
 *.rsuser
