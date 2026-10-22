@@ -305,7 +305,7 @@ void PreviewRenderer::update_drawable_meshes(Scene& scene)
     }
     for (const Mesh* mesh: general_meshes_to_delete) {
         general_meshes.erase(mesh);
-        logger->info("drawable mesh corresponding to mesh \"{}\" is removed", mesh->name);
+        logger->info("drawable mesh corresponding to mesh is removed");
     }
 }
 
@@ -359,7 +359,7 @@ void PreviewRenderer::update_drawable_linesets(Scene& scene)
     for (const LineSet* lineset: deleted_linesets) {
         general_linesets.erase(lineset);
         logger->info(
-            "drawable line set corresponding to line set \"{}\" is removed", lineset->name
+            "drawable line set corresponding to line set is removed"
         );
     }
 }
