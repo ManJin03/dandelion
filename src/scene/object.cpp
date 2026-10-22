@@ -44,7 +44,7 @@ Object::Object(const string& object_name) :
 
 Matrix4f Object::model() const
 {
-    return Matrix4f::Identity();
+    return (Eigen::Translation3f(center) * rotation * Eigen::Scaling(scaling)).matrix();
 }
 
 void Object::update(vector<Object*>& all_objects)

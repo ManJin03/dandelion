@@ -239,9 +239,28 @@ void Toolbar::layout_mode(Scene& scene)
             );
             ImGui::PopItemWidth();
             ImGui::PopID();
-            selected_object->rotation = AngleAxisf(radians(x_angle), Vector3f::UnitX())
-                                      * AngleAxisf(radians(y_angle), Vector3f::UnitY())
-                                      * AngleAxisf(radians(z_angle), Vector3f::UnitZ());
+            // selected_object->rotation = AngleAxisf(radians(x_angle), Vector3f::UnitX())
+            //                           * AngleAxisf(radians(y_angle), Vector3f::UnitY())
+            //                           * AngleAxisf(radians(z_angle), Vector3f::UnitZ());
+            const Quaternionf qx{
+                static_cast<Eigen::Quaternion<float>::Scalar>(cos(radians(x_angle/2))),
+                static_cast<Eigen::Quaternion<float>::Scalar>(sin(radians(x_angle/2))),
+                0,
+                0
+            };
+            const Quaternionf qy{
+                static_cast<Eigen::Quaternion<float>::Scalar>(cos(radians(y_angle/2))),
+                0,
+                static_cast<Eigen::Quaternion<float>::Scalar>(sin(radians(y_angle/2))),
+                0
+            };
+            const Quaternionf qz{
+                static_cast<Eigen::Quaternion<float>::Scalar>(cos(radians(z_angle/2))),
+                0,
+                0,
+                static_cast<Eigen::Quaternion<float>::Scalar>(sin(radians(z_angle/2)))
+            };
+            selected_object->rotation = qx * qy * qz;
         }
         ImGui::EndTabItem();
     }

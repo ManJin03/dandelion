@@ -38,8 +38,72 @@ bool operator<(const HalfedgeMesh::EdgeRecord& a, const HalfedgeMesh::EdgeRecord
 
 optional<Edge*> HalfedgeMesh::flip_edge(Edge* e)
 {
-    (void)e;
-    return std::nullopt;
+    logger->trace("---start flip_edge {}---" , e->id);
+
+    if (e->on_boundary()) {
+        logger->trace("boundary edge");
+        return e;
+    }
+    //日志打印辅助lambda函数
+    auto printh = [&] (Halfedge* h)
+    {
+        logger->trace("h {} next {} prev {} inv {} v {} e {} f {}" ,
+                      h->id , h->next->id , h->prev->id , h->inv->id , h->from->id , h->edge->id , h->face->id);
+    };
+    auto printface = [&] (Face* f)
+    {
+        logger->trace("face {}" , f->id);
+        printh(f->halfedge);
+        printh(f->halfedge->next);
+        printh(f->halfedge->prev);
+    };
+    //所需边
+    auto h12 = e->halfedge; //h43
+    auto h21 = h12->inv; //h34
+    auto h31 = h12->prev;
+    auto h42 = h21->prev;
+    auto h14 = h21->next;
+    auto h23 = h12->next;
+    //所需点
+    auto v1 = h12->from;
+    auto v2 = h21->from;
+    auto v3 = h31->from;
+    auto v4 = h42->from;
+    //所需面
+    auto f1 = h12->face;
+    auto f2 = h21->face;
+    //开始日志
+    logger->trace("v1 {} v2 {} v3 {} v4 {}" , v1->id , v2->id , v3->id , v4->id);
+    logger->trace("h12 {} h23 {} h31 {} " , h12->id , h23->id , h31->id);
+    logger->trace("h21 {} h14 {} h42 {} " , h21->id , h14->id , h42->id);
+    printface(f1);
+    printface(f2);
+    f1->halfedge = h12;
+    f2->halfedge = h21;
+    //翻转所选边
+    h12->set_neighbors(h31 , h14 , h21 , v4 , e , f1);
+    h21->set_neighbors(h42 , h23 , h12 , v3 , e , f2);
+    //修正其余边
+    h23->next = h21;
+    h23->prev = h42;
+    h23->face = f2;
+    h31->next = h14;
+    h31->prev = h12;
+    h14->next = h12;
+    h14->prev = h31;
+    h14->face = f1;
+    h42->next = h23;
+    h42->prev = h21;
+    //修正点的边
+    v1->halfedge = h14;
+    v2->halfedge = h23;
+    v3->halfedge = h31;
+    v4->halfedge = h42;
+    //结束日志
+    printface(f1);
+    printface(f2);
+    logger->trace("---end---");
+    return e;
 }
 
 optional<Vertex*> HalfedgeMesh::split_edge(Edge* e)
