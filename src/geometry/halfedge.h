@@ -249,7 +249,7 @@ public:
      * 分裂操作要求指定边的两个邻接面都是三角形面。
      * \returns 如果分裂成功，返回新增顶点；反之返回 `std::nullopt` 。
      */
-    std::optional<Vertex*> split_edge(Edge* e);
+    std::optional<Vertex*> split_edge(Edge* edge);
     /*!
      * \~chinese
      * \brief 坍缩一条边。
