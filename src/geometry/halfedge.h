@@ -265,7 +265,7 @@ public:
      * 时才执行坍缩，以免破坏流行性质。
      * \returns 如果坍缩成功，返回坍缩后的顶点；反之返回 `std::nullopt` 。
      */
-    std::optional<Vertex*> collapse_edge(Edge* e);
+    std::optional<Vertex*> collapse_edge(Edge* edge);
     /*!
      * \~chinese
      * \brief 执行一次 Loop 曲面细分。
