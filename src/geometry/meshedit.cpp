@@ -132,6 +132,7 @@ optional<Edge*> HalfedgeMesh::flip_edge(Edge* e)
     //结束日志
     printface(f1);
     printface(f2);
+    validate();
     logger->trace("---end---");
     return e;
 }
@@ -328,6 +329,7 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
             printface(3);
         }
     } while (false);
+    validate();
     logger->trace("---end---");
     return v[4];
 }
@@ -483,6 +485,8 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
             erase(f[1]);
         }
     } while (false);
+    validate();
+    logger->trace("---end---");
     return v[4];
 }
 
