@@ -155,7 +155,7 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         }
         return h->next->next == h->prev;
     };
-    if (!is_triangle(edge->halfedge) || (!boundary && is_triangle(edge->halfedge->inv))) {
+    if (!is_triangle(edge->halfedge) || (!boundary && !is_triangle(edge->halfedge->inv))) {
         logger->trace("no a real adjacent triangle");
         return std::nullopt;
     }
@@ -351,7 +351,7 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
         }
         return h->next->next == h->prev;
     };
-    if (!is_triangle(edge->halfedge) || !is_triangle(edge->halfedge->inv)) {
+    if (!is_triangle(edge->halfedge) || (!boundary && !is_triangle(edge->halfedge->inv))) {
         logger->trace("collapse requires two triangle faces");
         return std::nullopt;
     }
@@ -416,7 +416,7 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
             }
             p = p->prev->inv;
         } while (p != v[1]->halfedge);
-        if (num > 2) {
+        if (num != (boundary ? 1 : 2)) {
             return std::nullopt;
         }
     } while (false);
@@ -434,10 +434,6 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
             p->from = v[4];
             p = p->prev->inv;
         } while (p != h[1][0]);
-        erase(h[0][1]);
-        erase(h[1][2]);
-        erase(h[2][0]);
-        erase(h[1][0]);
         if (h[2][1]->next==h[1][0]) {
             h[2][1]->next=h[1][0]->next;
         }
@@ -447,11 +443,18 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
         h[4][2]->set_neighbors(h[4][2]->next , h[4][2]->prev , h[2][4] , v[4] , e[2][4] , h[4][2]->face);
         h[2][4]->set_neighbors(h[2][4]->next , h[2][4]->prev , h[4][2] , v[2] , e[2][4] , h[2][4]->face);
         if (!boundary) {
-            erase(h[0][3]);
-            erase(h[3][1]);
             h[4][3]->set_neighbors(h[4][3]->next , h[4][3]->prev , h[3][4] , v[4] , e[3][4] , h[4][3]->face);
             h[3][4]->set_neighbors(h[3][4]->next , h[3][4]->prev , h[4][3] , v[3] , e[3][4] , h[3][4]->face);
+            erase(h[0][3]);
+            erase(h[3][1]);
         }
+        else {
+            f[1]->halfedge = h[1][0]->next;
+        }
+        erase(h[0][1]);
+        erase(h[1][2]);
+        erase(h[2][0]);
+        erase(h[1][0]);
     } while (false);
     //修改边
     do {
