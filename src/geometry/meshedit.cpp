@@ -3,6 +3,7 @@
 #include <set>
 #include <vector>
 #include <string>
+#include <unordered_set>
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -38,8 +39,10 @@ bool operator<(const HalfedgeMesh::EdgeRecord& a, const HalfedgeMesh::EdgeRecord
 
 optional<Edge*> HalfedgeMesh::flip_edge(Edge* e)
 {
+    if (e == nullptr) {
+        return std::nullopt;
+    }
     logger->trace("---start flip_edge {}---" , e->id);
-
     if (e->on_boundary()) {
         logger->trace("boundary edge");
         return std::nullopt;
@@ -57,9 +60,21 @@ optional<Edge*> HalfedgeMesh::flip_edge(Edge* e)
         printh(f->halfedge->next);
         printh(f->halfedge->prev);
     };
+    auto is_triangle = [] (Halfedge* h)
+    {
+        if (h == nullptr) {
+            return false;
+        }
+        return h->next->next == h->prev;
+    };
     //所需边
     auto h12 = e->halfedge; //h43
     auto h21 = h12->inv; //h34
+    //检测两边是否为三角面
+    if (!is_triangle(h12) || !is_triangle(h21)) {
+        logger->trace("flip requires two triangle faces");
+        return std::nullopt;
+    }
     auto h31 = h12->prev;
     auto h42 = h21->prev;
     auto h14 = h21->next;
@@ -78,16 +93,15 @@ optional<Edge*> HalfedgeMesh::flip_edge(Edge* e)
     logger->trace("h21 {} h14 {} h42 {} " , h21->id , h14->id , h42->id);
     printface(f1);
     printface(f2);
-    //v3和v4本来就相连，不执行翻转
+    //v3和v4如果本来就相连，不执行翻转
+    Halfedge* p = v3->halfedge;
     do {
-        auto p = v3->halfedge->inv;
-        do {
-            if (p->from == v4) {
-                return std::nullopt;
-            }
-            p = p->next->inv;
-        } while (p != v3->halfedge->inv);
-    } while (false);
+        if (p->inv->from == v4) {
+            logger->trace("flip would create a duplicate edge");
+            return std::nullopt;
+        }
+        p = p->inv->next;
+    } while (p != v3->halfedge);
     //面修复
     do{
         f1->halfedge = h12;
@@ -124,7 +138,27 @@ optional<Edge*> HalfedgeMesh::flip_edge(Edge* e)
 
 optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
 {
+    if (edge == nullptr) {
+        return std::nullopt;
+    }
     logger->trace("---split edge {}---" , edge->id);
+    //若是边界则修改其方向
+    const bool boundary = edge->on_boundary();
+    if (edge->halfedge->is_boundary()) {
+        edge->halfedge = edge->halfedge->inv;
+    }
+    //检侧三角面
+    auto is_triangle = [] (Halfedge* h)
+    {
+        if (h == nullptr) {
+            return false;
+        }
+        return h->next->next == h->prev;
+    };
+    if (!is_triangle(edge->halfedge) || (!boundary && is_triangle(edge->halfedge->inv))) {
+        logger->trace("no a real adjacent triangle");
+        return std::nullopt;
+    }
     //声明存储数组
     vector<vector<Halfedge*>> h(5 , vector<Halfedge*>(5));
     vector<Edge*> e(4);
@@ -158,44 +192,54 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         h[1][0] = h[0][1]->inv;
         h[1][2] = h[0][1]->next;
         h[2][0] = h[0][1]->prev;
-        h[0][3] = h[1][0]->next;
-        h[3][1] = h[1][0]->prev;
         h[0][4] = h[0][1];
         h[1][4] = h[1][0];
         printh(0 , 1);
         printh(1 , 0);
         printh(1 , 2);
         printh(2 , 0);
-        printh(0 , 3);
-        printh(3 , 1);
         h[4][1] = new_halfedge();
         h[4][0] = new_halfedge();
         h[2][4] = new_halfedge();
         h[4][2] = new_halfedge();
-        h[3][4] = new_halfedge();
-        h[4][3] = new_halfedge();
+        if (!boundary) {
+            h[0][3] = h[1][0]->next;
+            h[3][1] = h[1][0]->prev;
+            printh(0 , 3);
+            printh(3 , 1);
+            h[3][4] = new_halfedge();
+            h[4][3] = new_halfedge();
+        }
     } while (false);
     //从新点出发的边
     do {
         e[0] = edge;
         e[1] = new_edge();
         e[2] = new_edge();
-        e[3] = new_edge();
+        e[2]->is_new = true;
         printe(0);
         printe(1);
         printe(2);
-        printe(3);
+        if (!boundary) {
+            e[3] = new_edge();
+            e[3]->is_new = true;
+            printe(3);
+        }
     } while (false);
     //点
     do {
         v[0] = h[0][1]->from;
         v[1] = h[1][0]->from;
         v[2] = h[2][0]->from;
-        v[3] = h[3][1]->from;
-        for (int i = 0 ; i < 4 ; ++i) {
+        for (int i = 0 ; i < 3 ; ++i) {
             printv(i);
         }
+        if (!boundary) {
+            v[3] = h[3][1]->from;
+            printv(3);
+        }
         v[4] = new_vertex();
+        v[4]->is_new = true;
     } while (false);
     //面
     do {
@@ -204,7 +248,9 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         printface(0);
         printface(1);
         f[2] = new_face();
-        f[3] = new_face();
+        if (!boundary) {
+            f[3] = new_face();
+        }
     } while (false);
     //连接半边
     do {
@@ -220,39 +266,52 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         printh(4 , 1);
         printh(1 , 2);
         printh(2 , 4);
-        h[4][0]->set_neighbors(h[0][3] , h[3][4] , h[0][4] , v[4] , e[0] , f[1]);
-        h[0][3]->set_neighbors(h[3][4] , h[4][0] , h[0][3]->inv , v[0] , h[0][3]->edge , f[1]);
-        h[3][4]->set_neighbors(h[4][0] , h[0][3] , h[4][3] , v[3] , e[3] , f[1]);
-        h[1][4]->set_neighbors(h[4][3] , h[3][1] , h[4][1] , v[1] , e[1] , f[3]);
-        h[4][3]->set_neighbors(h[3][1] , h[1][4] , h[3][4] , v[4] , e[3] , f[3]);
-        h[3][1]->set_neighbors(h[1][4] , h[4][3] , h[3][1]->inv , v[3] , h[3][1]->edge , f[3]);
-        printh(4 , 0);
-        printh(0 , 3);
-        printh(3 , 4);
-        printh(1 , 4);
-        printh(4 , 3);
-        printh(3 , 1);
+        if (!boundary) {
+            h[4][0]->set_neighbors(h[0][3] , h[3][4] , h[0][4] , v[4] , e[0] , f[1]);
+            h[0][3]->set_neighbors(h[3][4] , h[4][0] , h[0][3]->inv , v[0] , h[0][3]->edge , f[1]);
+            h[3][4]->set_neighbors(h[4][0] , h[0][3] , h[4][3] , v[3] , e[3] , f[1]);
+            h[1][4]->set_neighbors(h[4][3] , h[3][1] , h[4][1] , v[1] , e[1] , f[3]);
+            h[4][3]->set_neighbors(h[3][1] , h[1][4] , h[3][4] , v[4] , e[3] , f[3]);
+            h[3][1]->set_neighbors(h[1][4] , h[4][3] , h[3][1]->inv , v[3] , h[3][1]->edge , f[3]);
+            printh(4 , 0);
+            printh(0 , 3);
+            printh(3 , 4);
+            printh(1 , 4);
+            printh(4 , 3);
+            printh(3 , 1);
+        }
+        else {
+            h[4][0]->set_neighbors(h[1][0]->next , h[1][4] , h[0][4] , v[4] , e[0] , f[1]);
+            h[1][4]->set_neighbors(h[4][0] , h[1][4]->prev , h[4][1] , v[1] , e[1] , f[1]);
+            printh(4,0);
+            printh(1,4);
+        }
     } while (false);
     //连接边
     do {
         e[0]->halfedge = h[0][4];
         e[1]->halfedge = h[1][4];
         e[2]->halfedge = h[2][4];
-        e[3]->halfedge = h[3][4];
         printe(0);
         printe(1);
         printe(2);
-        printe(3);
+        if (!boundary) {
+            e[3]->halfedge = h[3][4];
+            printe(3);
+        }
     } while (false);
     //连接点
     do {
         v[0]->halfedge = h[0][4];
         v[1]->halfedge = h[1][4];
         v[2]->halfedge = h[2][4];
-        v[3]->halfedge = h[3][4];
         v[4]->halfedge = h[4][0];
-        for (int i = 0 ; i < 5 ; ++i) {
+        for (int i = 0 ; i < 3 ; ++i) {
             printv(i);
+        }
+        if (!boundary) {
+            v[3]->halfedge = h[3][4];
+            printv(3);
         }
         v[4]->pos = (v[0]->pos + v[1]->pos) / 2;
     } while (false);
@@ -261,9 +320,12 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         f[0]->halfedge = h[0][4];
         f[1]->halfedge = h[4][0];
         f[2]->halfedge = h[4][1];
-        f[3]->halfedge = h[1][4];
-        for (int i = 0 ; i < 4 ; ++i) {
+        for (int i = 0 ; i < 3 ; ++i) {
             printface(i);
+        }
+        if (!boundary) {
+            f[3]->halfedge = h[1][4];
+            printface(3);
         }
     } while (false);
     logger->trace("---end---");
@@ -272,37 +334,31 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
 
 optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
 {
+    if (edge == nullptr) {
+        return std::nullopt;
+    }
     logger->trace("---collapse edge {} begin---" , edge->id);
+    //若是边界则执行方向修正
+    const bool boundary = edge->on_boundary();
+    if (boundary && edge->halfedge->is_boundary()) {
+        edge->halfedge = edge->halfedge->inv;
+    }
+    //两边三角面检测
+    auto is_triangle = [] (Halfedge* h)
+    {
+        if (h == nullptr) {
+            return false;
+        }
+        return h->next->next == h->prev;
+    };
+    if (!is_triangle(edge->halfedge) || !is_triangle(edge->halfedge->inv)) {
+        logger->trace("collapse requires two triangle faces");
+        return std::nullopt;
+    }
     vector<vector<Halfedge*>> h(5 , vector<Halfedge*>(5));
     vector<vector<Edge*>> e(5 , vector<Edge*>(5));
     vector<Vertex*> v(5);
     vector<Face*> f(2);
-    auto printv = [&] (const int i)
-    {
-        logger->trace("vertex{} {}" , i , v[i]->id);
-    };
-    auto printe = [&] (const int i , const int j)
-    {
-        logger->trace("edge{}{} {}" , i , j , e[i][j]->id);
-    };
-    auto printh = [&] (const int i , const int j)
-    {
-        const auto he = h[i][j];
-        logger->trace("h{}{} {} next {} prev {} inv {} v {} e {} f {}" ,
-                      i , j , he->id , he->next->id , he->prev->id , he->inv->id , he->from->id , he->edge->id ,
-                      he->face->id);
-    };
-    auto printface = [&] (const int i)
-    {
-        const auto face = f[i];
-        logger->trace("face{} {} h {} {} {}" ,
-                      i , face->id , face->halfedge->id , face->halfedge->next->id , face->halfedge->prev->id);
-    };
-    const bool boundary = edge->on_boundary();
-    //边界
-    if (boundary && edge->halfedge->is_boundary()) {
-        edge->halfedge = edge->halfedge->inv;
-    }
     //半边
     do {
         h[0][1] = edge->halfedge;
@@ -344,6 +400,26 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
         }
         v[4] = v[0];
     } while (false);
+    //检查v0，v1的领域交集是否只有v2,v3
+    do {
+        std::unordered_set<Vertex*> set;
+        auto p = v[0]->halfedge;
+        do {
+            set.insert(p->inv->from);
+            p = p->prev->inv;
+        } while (p != v[0]->halfedge);
+        p = v[1]->halfedge;
+        int num{0};
+        do {
+            if (set.contains(p->inv->from)) {
+                ++num;
+            }
+            p = p->prev->inv;
+        } while (p != v[1]->halfedge);
+        if (num > 2) {
+            return std::nullopt;
+        }
+    } while (false);
     //面
     do {
         f[0] = h[0][1]->face;
@@ -362,6 +438,12 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
         erase(h[1][2]);
         erase(h[2][0]);
         erase(h[1][0]);
+        if (h[2][1]->next==h[1][0]) {
+            h[2][1]->next=h[1][0]->next;
+        }
+        if (h[0][2]->prev==h[1][0]) {
+            h[0][2]->prev=h[1][0]->prev;
+        }
         h[4][2]->set_neighbors(h[4][2]->next , h[4][2]->prev , h[2][4] , v[4] , e[2][4] , h[4][2]->face);
         h[2][4]->set_neighbors(h[2][4]->next , h[2][4]->prev , h[4][2] , v[2] , e[2][4] , h[2][4]->face);
         if (!boundary) {
