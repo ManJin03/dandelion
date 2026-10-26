@@ -132,7 +132,6 @@ optional<Edge*> HalfedgeMesh::flip_edge(Edge* e)
     //结束日志
     printface(f1);
     printface(f2);
-    validate();
     logger->trace("---end---");
     return e;
 }
@@ -217,13 +216,11 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         e[0] = edge;
         e[1] = new_edge();
         e[2] = new_edge();
-        e[2]->is_new = true;
         printe(0);
         printe(1);
         printe(2);
         if (!boundary) {
             e[3] = new_edge();
-            e[3]->is_new = true;
             printe(3);
         }
     } while (false);
@@ -283,9 +280,10 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         }
         else {
             h[4][0]->set_neighbors(h[1][0]->next , h[1][4] , h[0][4] , v[4] , e[0] , f[1]);
+            h[4][0]->next->prev = h[4][0];
             h[1][4]->set_neighbors(h[4][0] , h[1][4]->prev , h[4][1] , v[1] , e[1] , f[1]);
-            printh(4,0);
-            printh(1,4);
+            printh(4 , 0);
+            printh(1 , 4);
         }
     } while (false);
     //连接边
@@ -293,11 +291,13 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
         e[0]->halfedge = h[0][4];
         e[1]->halfedge = h[1][4];
         e[2]->halfedge = h[2][4];
+        e[2]->is_new = !v[2]->is_new;
         printe(0);
         printe(1);
         printe(2);
         if (!boundary) {
             e[3]->halfedge = h[3][4];
+            e[3]->is_new = !v[3]->is_new;
             printe(3);
         }
     } while (false);
@@ -329,7 +329,6 @@ optional<Vertex*> HalfedgeMesh::split_edge(Edge* edge)
             printface(3);
         }
     } while (false);
-    validate();
     logger->trace("---end---");
     return v[4];
 }
@@ -485,7 +484,6 @@ optional<Vertex*> HalfedgeMesh::collapse_edge(Edge* edge)
             erase(f[1]);
         }
     } while (false);
-    validate();
     logger->trace("---end---");
     return v[4];
 }
@@ -508,15 +506,72 @@ void HalfedgeMesh::loop_subdivide()
     // the new subdivided (fine) mesh, which has more elements to traverse.
     // We will then assign vertex positions in the new mesh based on the values
     // we computed for the original mesh.
-
+    vector<Edge*> old_edges;
     // Compute new positions for all the vertices in the input mesh using
     // the Loop subdivision rule and store them in Vertex::new_pos.
-    //    At this point, we also want to mark each vertex as being a vertex of the
-    //    original mesh. Use Vertex::is_new for this.
-
+    auto calculate_vertices = [] (Vertex* v)
+    {
+        auto p = v->halfedge;
+        unsigned int n_neighbors = 0;
+        bool boundary = false;
+        do {
+            if (p->is_boundary()) {
+                boundary = true;
+                break;
+            }
+            ++n_neighbors;
+            p = p->inv->next;
+        } while (p != v->halfedge);
+        double nu{};
+        if (!boundary) {
+            if (n_neighbors == 3) {
+                nu = 9 / 16.0;
+            }
+            else {
+                nu = 3 / 8.0;
+            }
+            v->new_pos = (1.0 - nu) * v->pos + nu * v->neighborhood_center();
+        }
+        else {
+            nu = 1 / 8.0;
+            auto v1 = p->inv->from;
+            auto v2 = p->prev->from;
+            v->new_pos = (1.0 - nu * 2) * v->pos + nu * (v1->pos + v2->pos);
+        }
+        //v->new_pos = v->pos;
+    };
+    for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
+        calculate_vertices(v);
+    // At this point, we also want to mark each vertex as being a vertex of the
+    // original mesh. Use Vertex::is_new for this.
+        v->is_new = false;
+    }
     // Next, compute the subdivided vertex positions associated with edges, and
     // store them in Edge::new_pos.
-
+    auto calculate_edges = [] (Edge* e)
+    {
+        auto h = e->halfedge;
+        double nu{};
+        Vertex* v[4];
+        v[0] = h->from;
+        v[1] = h->inv->from;
+        if (!e->on_boundary()) {
+            v[2] = h->prev->from;
+            v[3] = h->inv->prev->from;
+            nu = 1 / 8.0;
+            e->new_pos = (0.5 - nu) * (v[0]->pos + v[1]->pos) + nu * (v[2]->pos + v[3]->pos);
+        }
+        else {
+            nu = 0.5;
+            e->new_pos = nu * (v[0]->pos + v[1]->pos);
+        }
+        //e->new_pos = 0.5 * v[0]->pos + 0.5 * v[1]->pos;
+    };
+    for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
+        old_edges.push_back(e);
+        calculate_edges(e);
+        e->is_new = false;
+    }
     // Next, we're going to split every edge in the mesh, in any order.
     // We're also going to distinguish subdivided edges that came from splitting
     // an edge in the original mesh from new edges by setting the boolean Edge::is_new.
@@ -527,11 +582,22 @@ void HalfedgeMesh::loop_subdivide()
     // edges: original edges, edges split from original edges and newly added edges.
     // The newly added edges are marked with Edge::is_new property, so there is not
     // any other property to mark the edges I just split.
-
+    for (const auto e : old_edges) {
+        if (auto v = split_edge(e) ; v.has_value()) {
+            v.value()->new_pos = e->new_pos;
+        }
+    }
     // Now flip any new edge that connects an old and new vertex.
-
+    for (auto e = old_edges.back() ; e != nullptr ; e = e->next_node) {
+        if (e->is_new) {
+            flip_edge(e);
+        }
+    }
     // Finally, copy new vertex positions into the Vertex::pos.
-
+    for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
+        v->pos = v->new_pos;
+        v->is_new = false;
+    }
     // Once we have successfully subdivided the mesh, set global_inconsistent
     // to true to trigger synchronization with GL::Mesh.
     modified = true;
