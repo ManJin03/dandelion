@@ -1,9 +1,11 @@
 #include "halfedge.h"
 
+#include <cmath>
+#include <limits>
 #include <set>
-#include <vector>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -25,7 +27,18 @@ HalfedgeMesh::EdgeRecord::EdgeRecord(unordered_map<Vertex*, Matrix4f>& vertex_qu
 {
     auto v1 = e->halfedge->from;
     auto v2 = e->halfedge->inv->from;
-    auto K = vertex_quadrics[v1] + vertex_quadrics[v2];
+    // 这里必须用 find 而不是 operator[]：顶点被合并后它的 quadric 会从表里删除，
+    // 而 operator[] 遇到缺失的 key 会插入一个未初始化的矩阵，污染后续所有代价计算。
+    Matrix4f K = Matrix4f::Zero();
+    auto accumulate_quadric = [&vertex_quadrics , &K] (Vertex* v)
+    {
+        auto it = vertex_quadrics.find(v);
+        if (it != vertex_quadrics.end()) {
+            K += it->second;
+        }
+    };
+    accumulate_quadric(v1);
+    accumulate_quadric(v2);
     auto A = K.topLeftCorner(3 , 3);
     auto b = K.topRightCorner(3 , 1);
     const Vector3f p1 = v1->pos, p2 = v2->pos, pm = 0.5f * (p1 + p2);
@@ -646,40 +659,82 @@ void HalfedgeMesh::simplify()
     // Compute initial quadrics for each face by simply writing the plane equation
     // for the face in homogeneous coordinates. These quadrics should be stored
     // in face_quadrics
-    auto caculate_face_quadrics = [] (Face* f)
+    auto caculate_face_quadrics = [] (Face* f) -> optional<Matrix4f>
     {
-        auto N = f->normal();
+        if (f->is_boundary) {
+            return std::nullopt;
+        }
+        auto area_weighted_normal = f->area_weighted_normal();
+        const float area_measure = area_weighted_normal.squaredNorm();
+        if (!area_weighted_normal.allFinite() || !std::isfinite(area_measure)
+            || area_measure <= 0.0f) {
+            return std::nullopt;
+        }
+        auto N = area_weighted_normal.normalized();
         auto p = f->halfedge->from->pos;
         Vector4f v(N(0) , N(1) , N(2) , -p.dot(N));
         return static_cast<Matrix4f>(v * v.transpose());
     };
-    for (auto f=faces.head;f!=nullptr;f=f->next_node) {
-        face_quadrics[f]=caculate_face_quadrics(f);
+    for (auto f = faces.head ; f != nullptr ; f = f->next_node) {
+        if (auto quadric = caculate_face_quadrics(f) ; quadric.has_value()) {
+            face_quadrics[f] = quadric.value();
+        }
     }
 
     // -> Compute an initial quadric for each vertex as the sum of the quadrics
     //    associated with the incident faces, storing it in vertex_quadrics
     auto caculate_vertex_quadrics = [&] (Vertex* v)
     {
-        auto h=v->halfedge;
+        auto h = v->halfedge;
         Matrix4f K{Matrix4f::Zero()};
         do {
-            K+=face_quadrics[h->face];
-            h=h->inv->next;
-        }while (h!=v->halfedge);
+            auto it = face_quadrics.find(h->face);
+            if (it != face_quadrics.end()) {
+                K += it->second;
+            }
+            h = h->inv->next;
+        } while (h != v->halfedge);
         return K;
     };
-    for (auto v=vertices.head ; v != nullptr ; v = v->next_node) {
-        vertex_quadrics[v]=caculate_vertex_quadrics(v);
+    for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
+        vertex_quadrics[v] = caculate_vertex_quadrics(v);
     }
 
     // -> Build a priority queue of edges according to their quadric error cost,
     //    i.e., by building an Edge_Record for each edge and sticking it in the
     //    queue. You may want to use the above PQueue<Edge_Record> for this.
-    for (auto e=edges.head ; e != nullptr ; e = e->next_node) {
-        edge_records[e]=EdgeRecord(vertex_quadrics,e);
+    for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
+        if (e->on_boundary()) {
+            continue;
+        }
+        edge_records[e] = EdgeRecord(vertex_quadrics , e);
         edge_queue.insert(edge_records[e]);
     }
+
+    auto remove_edge_record = [&] (Edge* e)
+    {
+        auto it = edge_records.find(e);
+        if (it == edge_records.end()) {
+            return;
+        }
+        edge_queue.erase(it->second);
+        edge_records.erase(it);
+    };
+    auto upsert_edge_record = [&] (Edge* e)
+    {
+        remove_edge_record(e);
+        if (e->on_boundary()) {
+            return;
+        }
+        auto new_record = EdgeRecord(vertex_quadrics , e);
+        edge_records[e] = new_record;
+        edge_queue.insert(new_record);
+    };
+    auto quadric_of = [&vertex_quadrics] (Vertex* v)
+    {
+        auto it = vertex_quadrics.find(v);
+        return it == vertex_quadrics.end() ? Matrix4f(Matrix4f::Zero()) : it->second;
+    };
 
     // -> Until we reach the target edge budget, collapse the best edge. Remember
     //    to remove from the queue any edge that touches the collapsing edge
@@ -687,65 +742,48 @@ void HalfedgeMesh::simplify()
     //    the collapsed vertex AFTER it's been collapsed. Also remember to assign
     //    a quadric to the collapsed vertex, and to pop the collapsed edge off the
     //    top of the queue.
-    auto loopnum = faces.size / 4 + 1;
-    while (faces.size > loopnum && !edge_queue.empty()) {
-        auto er = *edge_queue.begin();
-        edge_queue.erase(er);
-        vector<Edge*> waitdelete{};
-        Matrix4f merge;
-        do {
-            auto e = er.edge;
-            auto h = e->halfedge;
-            auto v1 = h->from;
-            auto v2 = h->inv->from;
-            merge = vertex_quadrics[v1] + vertex_quadrics[v2];
-            vertex_quadrics.erase(v1);
-            vertex_quadrics.erase(v2);
-            auto erase = [&waitdelete] (Vertex* v)
-            {
-                auto h = v->halfedge;
-                do {
-                    waitdelete.push_back(h->edge);
-                    h = h->inv->next;
-                } while (h != v->halfedge);
-            };
-            erase(v1);
-            erase(v2);
-        } while (false);
-        auto ov = collapse_edge(er.edge);
-        if (ov.has_value()) {
-            for (auto e : waitdelete) {
-                if (edge_records.contains(e)) {
-                    edge_queue.erase(edge_records[e]);
-                }
-            }
-            auto v = ov.value();
-            v->pos = er.optimal_pos;
+    const size_t face_budget = faces.size / 4 + 1;
+    while (faces.size > face_budget && !edge_queue.empty()) {
+        const EdgeRecord best = *edge_queue.begin();
+        edge_queue.erase(edge_queue.begin());
+        Edge* edge = best.edge;
+        auto v1 = edge->halfedge->from;
+        auto v2 = edge->halfedge->inv->from;
+
+        vector<Edge*> one_ring;
+        for (auto v : {v1 , v2}) {
             auto h = v->halfedge;
             do {
-                auto tf = h->face;
-                face_quadrics[tf] = caculate_face_quadrics(tf);
-                h = h->inv->next;
-            } while (h != v->halfedge);
-            vertex_quadrics[v] = merge;
-            do {
-                auto tv = h->inv->from;
-                vertex_quadrics[tv] = caculate_vertex_quadrics(tv);
-                h = h->inv->next;
-            } while (h != v->halfedge);
-            do {
-                auto e = h->edge;
-                if (edge_records.contains(e)) {
-                    edge_queue.erase(edge_records[e]);
-                }
-                edge_records[e] = EdgeRecord(vertex_quadrics , e);
-                edge_queue.insert(edge_records[e]);
+                one_ring.push_back(h->edge);
                 h = h->inv->next;
             } while (h != v->halfedge);
         }
+        const Matrix4f merged_quadric = quadric_of(v1) + quadric_of(v2);
+
+        auto ov = collapse_edge(edge);
+        if (!ov.has_value()) {
+            logger->trace("edge {} cannot be collapsed, dropped from the queue" , edge->id);
+            continue;
+        }
+
+        for (Edge* e : one_ring) {
+            remove_edge_record(e);
+        }
+        auto v = ov.value();
+        v->pos = best.optimal_pos;
+        vertex_quadrics[v] = merged_quadric;
+        vertex_quadrics.erase(v == v1 ? v2 : v1);
+        auto h = v->halfedge;
+        do {
+            upsert_edge_record(h->edge);
+            h = h->inv->next;
+        } while (h != v->halfedge);
+    }
+    if (faces.size > face_budget) {
+        logger->info("no collapsible edge left, stop simplification early");
     }
 
-    logger->info("simplified mesh: {} vertices, {} faces", vertices.size, faces.size);
+    logger->info("simplified mesh: {} vertices, {} faces" , vertices.size , faces.size);
     logger->info("simplification done\n");
     modified = true;
     validate();
