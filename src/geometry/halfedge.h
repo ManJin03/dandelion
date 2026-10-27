@@ -330,11 +330,11 @@ private:
         /*! \~chinese 根据两个端点的二次误差矩阵构造边的二次误差矩阵，并计算最佳坍缩位置。 */
         EdgeRecord(std::unordered_map<Vertex*, Eigen::Matrix4f>& vertex_quadrics, Edge* e);
         /*! \~chinese 这个记录对应的边。 */
-        Edge* edge;
+        Edge* edge{};
         /*! \~chinese 执行曲面简化算法时的最佳坍缩位置。 */
         Eigen::Vector3f optimal_pos;
         /*! \~chinese 执行曲面简化算法时坍缩这条边的代价（带来的误差）。 */
-        float cost;
+        float cost{};
     };
 
     /*! \~chinese 排序 `EdgeRecord` 所需的比较运算符重载。 */
