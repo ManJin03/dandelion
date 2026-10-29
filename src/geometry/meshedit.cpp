@@ -798,6 +798,10 @@ void HalfedgeMesh::isotropic_remesh()
         "remesh the object {} (ID: {}) with strategy Isotropic Remeshing", object.name, object.id
     );
     logger->info("original mesh: {} vertices, {} faces", vertices.size, faces.size);
+    if (edges.size == 0) {
+        logger->warn("nothing to remesh: the mesh has no edge");
+        return;
+    }
     // Compute the mean edge length.
     float Length{};
     for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
@@ -840,7 +844,9 @@ void HalfedgeMesh::isotropic_remesh()
                     return len > shortLength;
                 };
                 if (shouldSplit(e->halfedge) && shouldSplit(e->halfedge->inv)) {
-                    split_edge(e);
+                    if(!split_edge(e).has_value()) {
+                        logger->trace("edge {} split failed", e->id);
+                    }
                 }
             }
         }
@@ -862,13 +868,22 @@ void HalfedgeMesh::isotropic_remesh()
                 };
                 if (auto h = e->halfedge ; shouldCollapse(h) && shouldCollapse(h->inv)) {
                     if (h->is_boundary()) {
-                        h=h->inv;
+                        h = h->inv;
                     }
-                    selected_edges.erase(h->next->edge);
+                    Edge* removed[2] = {h->next->edge , nullptr};
                     if (!h->inv->is_boundary()) {
-                        selected_edges.erase(h->inv->prev->edge);
+                        removed[1] = h->inv->prev->edge;
                     }
-                    collapse_edge(e);
+                    if (collapse_edge(e).has_value()) {
+                        for (auto dead : removed) {
+                            if (dead != nullptr) {
+                                selected_edges.erase(dead);
+                            }
+                        }
+                    }
+                    else {
+                        logger->trace("edge {} cannot be collapsed, kept for the next round" , e->id);
+                    }
                 }
             }
         }
@@ -905,27 +920,38 @@ void HalfedgeMesh::isotropic_remesh()
                 return d2 < d;
             };
             if (shouldFlip(e)) {
-                flip_edge(e);
+                if (!flip_edge(e).has_value()) {
+                    logger->trace("edge {} flip failed");
+                }
             }
         }
         // Vertex averaging.
         logger->debug("Vertex averaging");
-        for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
-            auto calculate_new_pos = [] (const Vertex* vertex)->Vector3f
-            {
-                const float w = 0.2f;
-                const auto c = vertex->neighborhood_center();
-                const auto p = vertex->pos;
-                auto v = c - p;
-                auto h = vertex->halfedge;
-                Vector3f N = Vector3f::Zero();
-                do {
+        auto calculate_new_pos = [] (const Vertex* vertex)-> Vector3f
+        {
+            constexpr float w = 0.2f;
+            const auto p = vertex->pos;
+            bool boundary = false;
+            Vector3f N = Vector3f::Zero();
+            auto h = vertex->halfedge;
+            do {
+                if (h->face->is_boundary) {
+                    boundary = true;
+                }
+                else {
                     N += h->face->area_weighted_normal();
-                    h = h->inv->next;
-                } while (h != vertex->halfedge);
-                N.normalize();
-                return p + w * (v - N.dot(v) * N);
-            };
+                }
+                h = h->inv->next;
+            } while (h != vertex->halfedge);
+            const float n = N.norm();
+            if (boundary || !(n > 0.0f) || !std::isfinite(n)) {
+                return p;
+            }
+            const auto v = vertex->neighborhood_center() - p;
+            const Vector3f unit_n = N / n;
+            return p + w * (v - unit_n.dot(v) * unit_n);
+        };
+        for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
             v->new_pos = calculate_new_pos(v);
         }
         for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
