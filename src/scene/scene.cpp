@@ -293,9 +293,19 @@ void Scene::simulation_update()
 {
     // 这次模拟的总时长不是上一帧的时长，而是上一帧时长与之前帧剩余时长的总和，
     // 即上次调用 simulation_update 到现在过了多久。
-
+    const duration frame_duration = steady_clock::now() - last_update;
+    duration remained_duration = frame_duration;
+    const duration step_time{time_step};
+    int count{0};
     // 以固定的时间步长 (time_step) 循环模拟物体运动，每模拟一步，模拟总时长就减去一个
     // time_step ，当总时长不够一个 time_step 时停止模拟。
-
+    while (remained_duration > step_time) {
+        for (const auto& object : all_objects) {
+            object->update(all_objects);
+        }
+        remained_duration -= step_time;
+        ++count;
+    }
     // 根据刚才模拟时间步的数量，更新最后一次调用 simulation_update 的时间 (last_update)。
+    last_update = last_update + duration_cast<steady_clock::duration>(count * step_time);
 }

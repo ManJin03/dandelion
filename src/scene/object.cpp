@@ -47,15 +47,14 @@ Matrix4f Object::model() const
     return (Eigen::Translation3f(center) * rotation * Eigen::Scaling(scaling)).matrix();
 }
 
-void Object::update(vector<Object*>& all_objects)
+void Object::update([[maybe_unused]] vector<Object*>& all_objects)
 {
     // 首先调用 step 函数计下一步该物体的运动学状态。
     KineticState current_state{center, velocity, force / mass};
     KineticState next_state = step(prev_state, current_state);
-    (void)next_state;
     // 将物体的位置移动到下一步状态处，但暂时不要修改物体的速度。
     // 遍历 all_objects，检查该物体在下一步状态的位置处是否会与其他物体发生碰撞。
-    for (auto object: all_objects) {
+    /*for (auto object: all_objects) {
         (void)object;
 
         // 检测该物体与另一物体是否碰撞的方法是：
@@ -74,8 +73,11 @@ void Object::update(vector<Object*>& all_objects)
             // 如果发生碰撞，按动量定理计算两个物体碰撞后的速度，并将下一步状态的位置设为
             // current_state.position ，以避免重复碰撞。
         }
-    }
+    }*/
     // 将上一步状态赋值为当前状态，并将物体更新到下一步状态。
+    prev_state = current_state;
+    center=next_state.position;
+    velocity=next_state.velocity;
 }
 
 void Object::rebuild_BVH()
