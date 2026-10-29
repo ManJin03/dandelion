@@ -27,8 +27,6 @@ HalfedgeMesh::EdgeRecord::EdgeRecord(unordered_map<Vertex*, Matrix4f>& vertex_qu
 {
     auto v1 = e->halfedge->from;
     auto v2 = e->halfedge->inv->from;
-    // 这里必须用 find 而不是 operator[]：顶点被合并后它的 quadric 会从表里删除，
-    // 而 operator[] 遇到缺失的 key 会插入一个未初始化的矩阵，污染后续所有代价计算。
     Matrix4f K = Matrix4f::Zero();
     auto accumulate_quadric = [&vertex_quadrics , &K] (Vertex* v)
     {
@@ -62,6 +60,7 @@ HalfedgeMesh::EdgeRecord::EdgeRecord(unordered_map<Vertex*, Matrix4f>& vertex_qu
         float c = x.allFinite() ? evalCost(x) : std::numeric_limits<float>::infinity();
         if (std::isfinite(c) && c < cost) { cost = c; optimal_pos = x; }
     }
+    if (!std::isfinite(cost)){cost = std::numeric_limits<float>::max();}
 }
 
 bool operator<(const HalfedgeMesh::EdgeRecord& a, const HalfedgeMesh::EdgeRecord& b)
@@ -742,7 +741,7 @@ void HalfedgeMesh::simplify()
     //    the collapsed vertex AFTER it's been collapsed. Also remember to assign
     //    a quadric to the collapsed vertex, and to pop the collapsed edge off the
     //    top of the queue.
-    const size_t face_budget = faces.size / 4 + 1;
+    const size_t face_budget = faces.size / 2 + 1;
     while (faces.size > face_budget && !edge_queue.empty()) {
         const EdgeRecord best = *edge_queue.begin();
         edge_queue.erase(edge_queue.begin());
@@ -800,7 +799,13 @@ void HalfedgeMesh::isotropic_remesh()
     );
     logger->info("original mesh: {} vertices, {} faces", vertices.size, faces.size);
     // Compute the mean edge length.
-
+    float Length{};
+    for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
+        Length += e->length();
+    }
+    Length /= static_cast<float>(edges.size);
+    const float longLength{4 / 3.0f * Length};
+    const float shortLength{4 / 5.0f * Length};
     // Repeat the four main steps for 5 or 6 iterations
     // -> Split edges much longer than the target length (being careful about
     //    how the loop is written!)
@@ -809,16 +814,124 @@ void HalfedgeMesh::isotropic_remesh()
     //    been destroyed by a collapse (which ones?)
     // -> Now flip each edge if it improves vertex degree
     // -> Finally, apply some tangential smoothing to the vertex positions
-    static const size_t iteration_limit = 5;
+    static constexpr size_t iteration_limit = 5;
     set<Edge*>          selected_edges;
-    for (size_t i = 0; i != iteration_limit; ++i) {
+    for (size_t i = 0 ; i != iteration_limit ; ++i) {
+        logger->debug("start remesh round {}",i);
+        logger->debug("pick edges");
+        for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
+            auto len = e->length();
+            if (len > longLength || len < shortLength) {
+                selected_edges.insert(e);
+            }
+        }
         // Split long edges.
-
+        logger->debug("Split long edges");
+        for (const auto e : selected_edges) {
+            if (e->length() > longLength) {
+                auto shouldSplit = [&] (const Halfedge* h)
+                {
+                    if (h->is_boundary()) {
+                        return true;
+                    }
+                    const auto center = h->edge->center();
+                    const auto v2pos = h->prev->from->pos;
+                    const auto len = (center - v2pos).norm();
+                    return len > shortLength;
+                };
+                if (shouldSplit(e->halfedge) && shouldSplit(e->halfedge->inv)) {
+                    split_edge(e);
+                }
+            }
+        }
         // Collapse short edges.
-
+        logger->debug("Collapse short edges");
+        for (const auto e : selected_edges) {
+            if (e->length() < shortLength) {
+                auto shouldCollapse = [&] (const Halfedge* h)
+                {
+                    auto center = h->edge->center();
+                    auto p = h->prev;
+                    do {
+                        if ((p->from->pos - center).norm() > longLength) {
+                            return false;
+                        }
+                        p = p->inv->prev;
+                    } while (p != h->prev);
+                    return true;
+                };
+                if (auto h = e->halfedge ; shouldCollapse(h) && shouldCollapse(h->inv)) {
+                    if (h->is_boundary()) {
+                        h=h->inv;
+                    }
+                    selected_edges.erase(h->next->edge);
+                    if (!h->inv->is_boundary()) {
+                        selected_edges.erase(h->inv->prev->edge);
+                    }
+                    collapse_edge(e);
+                }
+            }
+        }
         // Flip edges.
-
+        logger->debug("Flip edges");
+        for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
+            auto degree = [] (const Vertex* v)
+            {
+                int ans{};
+                auto p = v->halfedge;
+                do {
+                    ++ans;
+                    p = p->inv->next;
+                } while (p != v->halfedge);
+                return ans;
+            };
+            auto shouldFlip = [degree] (const Edge* edge)
+            {
+                if (edge->on_boundary()) {
+                    return false;
+                }
+                const auto h = edge->halfedge;
+                Vertex* v[4];
+                v[0] = h->from;
+                v[1] = h->inv->from;
+                v[2] = h->prev->from;
+                v[3] = h->inv->prev->from;
+                int dg[4];
+                for (int i = 0 ; i < 4 ; ++i) {
+                    dg[i] = degree(v[i]);
+                }
+                const int d = abs(dg[0] - 6) + abs(dg[1] - 6) + abs(dg[2] - 6) + abs(dg[3] - 6);
+                const int d2 = abs(dg[0] - 7) + abs(dg[1] - 7) + abs(dg[2] - 5) + abs(dg[3] - 5);
+                return d2 < d;
+            };
+            if (shouldFlip(e)) {
+                flip_edge(e);
+            }
+        }
         // Vertex averaging.
+        logger->debug("Vertex averaging");
+        for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
+            auto calculate_new_pos = [] (const Vertex* vertex)->Vector3f
+            {
+                const float w = 0.2f;
+                const auto c = vertex->neighborhood_center();
+                const auto p = vertex->pos;
+                auto v = c - p;
+                auto h = vertex->halfedge;
+                Vector3f N = Vector3f::Zero();
+                do {
+                    N += h->face->area_weighted_normal();
+                    h = h->inv->next;
+                } while (h != vertex->halfedge);
+                N.normalize();
+                return p + w * (v - N.dot(v) * N);
+            };
+            v->new_pos = calculate_new_pos(v);
+        }
+        for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
+            v->pos = v->new_pos;
+        }
+        selected_edges.clear();
     }
     logger->info("remeshed mesh: {} vertices, {} faces\n", vertices.size, faces.size);
     modified = true;
