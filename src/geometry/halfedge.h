@@ -298,6 +298,15 @@ public:
      * 各向同性重网格化只能应用于三角形网格。
      */
     void isotropic_remesh();
+    /*!
+     * \~chinese
+     * \brief 执行一次拉普拉斯平滑。
+     *
+     * 使用余切权重 \f$w_i=\tfrac12(\cot\alpha_i+\cot\beta_i)\f$（\f$\alpha_i,\beta_i\f$
+     * 为边 \f$(v,v_i)\f$ 两侧三角形在该边对顶点处的内角），将每个内部顶点沿
+     * \f$\Delta_S(v)=\sum_i w_i(v_i-v)\f$ 方向移动一步；位于 mesh 边界上的顶点保持不变。
+     */
+    void laplacian_smooth();
     /*! \~chinese 所有半边。 */
     LinkedList<Halfedge> halfedges;
     /*! \~chinese 所有顶点。 */

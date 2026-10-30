@@ -963,3 +963,86 @@ void HalfedgeMesh::isotropic_remesh()
     modified = true;
     validate();
 }
+
+
+void HalfedgeMesh::laplacian_smooth()
+{
+    optional<HalfedgeMeshFailure> check_result = validate();
+    if (check_result.has_value()) {
+        return;
+    }
+    logger->info("laplacian_smooth object {} (ID: {})" , object.name , object.id);
+    logger->info("original mesh: {} vertices, {} faces" , vertices.size , faces.size);
+    //v ← v + λ∆S (v)
+    //∆S (v) = ∑ wi (vi − v)
+    //wi = 1/2 (cot αi + cot βi)
+    //cot ai = (a * b)/|a X b|
+    constexpr float lambda = 0.1f;
+    auto caculate_cot = [] (const Vector3f& a , const Vector3f& b)-> optional<float>
+    {
+        const auto cos = a.dot(b);
+        const auto sin = a.cross(b).norm();
+        if (sin < 1e-9f) {
+            return std::nullopt;
+        }
+        return cos / sin;
+    };
+    auto caculate_wi = [&] (const Halfedge* h)-> float
+    {
+        const auto v_src = h->from;
+        const auto v_dst = h->inv->from;
+        const auto v1 = h->inv->prev->from;
+        const auto v2 = h->prev->from;
+        auto cota = caculate_cot(v_src->pos - v1->pos , v_dst->pos - v1->pos);
+        auto cotb = caculate_cot(v_src->pos - v2->pos , v_dst->pos - v2->pos);
+        if (cota.has_value() && cotb.has_value()) {
+            return 0.5f * (cota.value() + cotb.value());
+        }
+        if (cota.has_value()) {
+            return 0.5f * cota.value();
+        }
+        if (cotb.has_value()) {
+            return 0.5f * cotb.value();
+        }
+        return 0;
+    };
+    auto is_boundary_vertex = [] (const Vertex* v)-> bool
+    {
+        auto h = v->halfedge;
+        do {
+            if (h->is_boundary()) {
+                return true;
+            }
+            h = h->inv->next;
+        } while (h != v->halfedge);
+        return false;
+    };
+    auto caculate_S = [&] (const Vertex* v)-> Vector3f
+    {
+        Vector3f S = Vector3f::Zero();
+        auto h = v->halfedge;
+        do {
+            const auto neighbor = h->inv->from;
+            const auto wi = caculate_wi(h);
+            S += wi * (neighbor->pos - v->pos);
+            h = h->inv->next;
+        } while (h != v->halfedge);
+        return S;
+    };
+    for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
+        if (is_boundary_vertex(v)) {
+            v->new_pos = v->pos;
+        }
+        else {
+            v->new_pos = v->pos + lambda * caculate_S(v);
+        }
+    }
+    for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
+        v->pos = v->new_pos;
+    }
+
+    logger->info("laplacian_smoothed mesh: {} vertices, {} faces" , vertices.size , faces.size);
+    logger->info("laplacian_smooth done\n");
+    modified = true;
+    validate();
+}

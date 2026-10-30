@@ -422,7 +422,9 @@ void Toolbar::model_mode(Scene& scene)
         if (ImGui::Button("Isotropic Remesh")) {
             scene.halfedge_mesh->isotropic_remesh();
         }
-
+        if (ImGui::Button("Laplacian Smooth")) {
+            scene.halfedge_mesh->laplacian_smooth();
+        }
         ImGui::EndTabItem();
     }
 }
