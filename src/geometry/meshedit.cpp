@@ -795,9 +795,9 @@ void HalfedgeMesh::isotropic_remesh()
         return;
     }
     logger->info(
-        "remesh the object {} (ID: {}) with strategy Isotropic Remeshing", object.name, object.id
+        "remesh the object {} (ID: {}) with strategy Isotropic Remeshing" , object.name , object.id
     );
-    logger->info("original mesh: {} vertices, {} faces", vertices.size, faces.size);
+    logger->info("original mesh: {} vertices, {} faces" , vertices.size , faces.size);
     if (edges.size == 0) {
         logger->warn("nothing to remesh: the mesh has no edge");
         return;
@@ -819,9 +819,9 @@ void HalfedgeMesh::isotropic_remesh()
     // -> Now flip each edge if it improves vertex degree
     // -> Finally, apply some tangential smoothing to the vertex positions
     static constexpr size_t iteration_limit = 5;
-    set<Edge*>          selected_edges;
+    set<Edge*> selected_edges;
     for (size_t i = 0 ; i != iteration_limit ; ++i) {
-        logger->debug("start remesh round {}",i);
+        logger->debug("start remesh round {}" , i);
         logger->debug("pick edges");
         for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
             auto len = e->length();
@@ -831,41 +831,41 @@ void HalfedgeMesh::isotropic_remesh()
         }
         // Split long edges.
         logger->debug("Split long edges");
+        auto shouldSplit = [&] (const Halfedge* h)
+        {
+            if (h->is_boundary()) {
+                return true;
+            }
+            const auto center = h->edge->center();
+            const auto v2pos = h->prev->from->pos;
+            const auto len = (center - v2pos).norm();
+            return len > shortLength;
+        };
         for (const auto e : selected_edges) {
             if (e->length() > longLength) {
-                auto shouldSplit = [&] (const Halfedge* h)
-                {
-                    if (h->is_boundary()) {
-                        return true;
-                    }
-                    const auto center = h->edge->center();
-                    const auto v2pos = h->prev->from->pos;
-                    const auto len = (center - v2pos).norm();
-                    return len > shortLength;
-                };
                 if (shouldSplit(e->halfedge) && shouldSplit(e->halfedge->inv)) {
-                    if(!split_edge(e).has_value()) {
-                        logger->trace("edge {} split failed", e->id);
+                    if (!split_edge(e).has_value()) {
+                        logger->trace("edge {} split failed" , e->id);
                     }
                 }
             }
         }
         // Collapse short edges.
         logger->debug("Collapse short edges");
+        auto shouldCollapse = [&] (const Halfedge* h)
+        {
+            auto center = h->edge->center();
+            auto p = h->prev;
+            do {
+                if ((p->from->pos - center).norm() > longLength) {
+                    return false;
+                }
+                p = p->inv->prev;
+            } while (p != h->prev);
+            return true;
+        };
         for (const auto e : selected_edges) {
             if (e->length() < shortLength) {
-                auto shouldCollapse = [&] (const Halfedge* h)
-                {
-                    auto center = h->edge->center();
-                    auto p = h->prev;
-                    do {
-                        if ((p->from->pos - center).norm() > longLength) {
-                            return false;
-                        }
-                        p = p->inv->prev;
-                    } while (p != h->prev);
-                    return true;
-                };
                 if (auto h = e->halfedge ; shouldCollapse(h) && shouldCollapse(h->inv)) {
                     if (h->is_boundary()) {
                         h = h->inv;
@@ -889,36 +889,36 @@ void HalfedgeMesh::isotropic_remesh()
         }
         // Flip edges.
         logger->debug("Flip edges");
+        auto degree = [] (const Vertex* v)
+        {
+            int ans{};
+            auto p = v->halfedge;
+            do {
+                ++ans;
+                p = p->inv->next;
+            } while (p != v->halfedge);
+            return ans;
+        };
+        auto shouldFlip = [degree] (const Edge* edge)
+        {
+            if (edge->on_boundary()) {
+                return false;
+            }
+            const auto h = edge->halfedge;
+            Vertex* v[4];
+            v[0] = h->from;
+            v[1] = h->inv->from;
+            v[2] = h->prev->from;
+            v[3] = h->inv->prev->from;
+            int dg[4];
+            for (int i = 0 ; i < 4 ; ++i) {
+                dg[i] = degree(v[i]);
+            }
+            const int d = abs(dg[0] - 6) + abs(dg[1] - 6) + abs(dg[2] - 6) + abs(dg[3] - 6);
+            const int d2 = abs(dg[0] - 7) + abs(dg[1] - 7) + abs(dg[2] - 5) + abs(dg[3] - 5);
+            return d2 < d;
+        };
         for (auto e = edges.head ; e != nullptr ; e = e->next_node) {
-            auto degree = [] (const Vertex* v)
-            {
-                int ans{};
-                auto p = v->halfedge;
-                do {
-                    ++ans;
-                    p = p->inv->next;
-                } while (p != v->halfedge);
-                return ans;
-            };
-            auto shouldFlip = [degree] (const Edge* edge)
-            {
-                if (edge->on_boundary()) {
-                    return false;
-                }
-                const auto h = edge->halfedge;
-                Vertex* v[4];
-                v[0] = h->from;
-                v[1] = h->inv->from;
-                v[2] = h->prev->from;
-                v[3] = h->inv->prev->from;
-                int dg[4];
-                for (int i = 0 ; i < 4 ; ++i) {
-                    dg[i] = degree(v[i]);
-                }
-                const int d = abs(dg[0] - 6) + abs(dg[1] - 6) + abs(dg[2] - 6) + abs(dg[3] - 6);
-                const int d2 = abs(dg[0] - 7) + abs(dg[1] - 7) + abs(dg[2] - 5) + abs(dg[3] - 5);
-                return d2 < d;
-            };
             if (shouldFlip(e)) {
                 if (!flip_edge(e).has_value()) {
                     logger->trace("edge {} flip failed");
@@ -959,11 +959,10 @@ void HalfedgeMesh::isotropic_remesh()
         }
         selected_edges.clear();
     }
-    logger->info("remeshed mesh: {} vertices, {} faces\n", vertices.size, faces.size);
+    logger->info("remeshed mesh: {} vertices, {} faces\n" , vertices.size , faces.size);
     modified = true;
     validate();
 }
-
 
 void HalfedgeMesh::laplacian_smooth()
 {
@@ -977,7 +976,7 @@ void HalfedgeMesh::laplacian_smooth()
     //∆S (v) = ∑ wi (vi − v)
     //wi = 1/2 (cot αi + cot βi)
     //cot ai = (a * b)/|a X b|
-    constexpr float lambda = 0.1f;
+
     auto caculate_cot = [] (const Vector3f& a , const Vector3f& b)-> optional<float>
     {
         const auto cos = a.dot(b);
@@ -1006,17 +1005,6 @@ void HalfedgeMesh::laplacian_smooth()
         }
         return 0;
     };
-    auto is_boundary_vertex = [] (const Vertex* v)-> bool
-    {
-        auto h = v->halfedge;
-        do {
-            if (h->is_boundary()) {
-                return true;
-            }
-            h = h->inv->next;
-        } while (h != v->halfedge);
-        return false;
-    };
     auto caculate_S = [&] (const Vertex* v)-> Vector3f
     {
         Vector3f S = Vector3f::Zero();
@@ -1029,13 +1017,32 @@ void HalfedgeMesh::laplacian_smooth()
         } while (h != v->halfedge);
         return S;
     };
+    auto calculate_new_pos = [&] (const Vertex* vertex)-> Vector3f
+    {
+        constexpr float lambda = 0.1f;
+        const auto p = vertex->pos;
+        bool boundary = false;
+        Vector3f N = Vector3f::Zero();
+        auto h = vertex->halfedge;
+        do {
+            if (h->is_boundary()) {
+                boundary = true;
+            }
+            else {
+                N += h->face->area_weighted_normal();
+            }
+            h = h->inv->next;
+        } while (h != vertex->halfedge);
+        const float n = N.norm();
+        if (boundary || !(n > 0.0f) || !std::isfinite(n)) {
+            return p;
+        }
+        const auto v = caculate_S(vertex);
+        const Vector3f unit_n = N / n;
+        return p + lambda * (v - unit_n.dot(v) * unit_n);
+    };
     for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
-        if (is_boundary_vertex(v)) {
-            v->new_pos = v->pos;
-        }
-        else {
-            v->new_pos = v->pos + lambda * caculate_S(v);
-        }
+        v->new_pos = calculate_new_pos(v);
     }
     for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
         v->pos = v->new_pos;
