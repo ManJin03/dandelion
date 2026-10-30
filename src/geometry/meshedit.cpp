@@ -979,12 +979,13 @@ void HalfedgeMesh::laplacian_smooth()
 
     auto caculate_cot = [] (const Vector3f& a , const Vector3f& b)-> optional<float>
     {
-        const auto cos = a.dot(b);
-        const auto sin = a.cross(b).norm();
-        if (sin < 1e-9f) {
+        const auto cosn = a.dot(b);
+        const auto sinn = a.cross(b).norm();
+        const auto cot = cosn / sinn;
+        if (cot > 1e9) {
             return std::nullopt;
         }
-        return cos / sin;
+        return cot;
     };
     auto caculate_wi = [&] (const Halfedge* h)-> float
     {
@@ -997,49 +998,40 @@ void HalfedgeMesh::laplacian_smooth()
         if (cota.has_value() && cotb.has_value()) {
             return 0.5f * (cota.value() + cotb.value());
         }
-        if (cota.has_value()) {
-            return 0.5f * cota.value();
-        }
-        if (cotb.has_value()) {
-            return 0.5f * cotb.value();
-        }
         return 0;
     };
     auto caculate_S = [&] (const Vertex* v)-> Vector3f
     {
         Vector3f S = Vector3f::Zero();
         auto h = v->halfedge;
+        float w{0};
         do {
             const auto neighbor = h->inv->from;
             const auto wi = caculate_wi(h);
             S += wi * (neighbor->pos - v->pos);
+            w += wi;
             h = h->inv->next;
         } while (h != v->halfedge);
-        return S;
+        return S/w;
     };
     auto calculate_new_pos = [&] (const Vertex* vertex)-> Vector3f
     {
-        constexpr float lambda = 0.1f;
+        constexpr float lambda = 0.2f;
         const auto p = vertex->pos;
         bool boundary = false;
-        Vector3f N = Vector3f::Zero();
         auto h = vertex->halfedge;
         do {
             if (h->is_boundary()) {
                 boundary = true;
-            }
-            else {
-                N += h->face->area_weighted_normal();
+                break;
             }
             h = h->inv->next;
         } while (h != vertex->halfedge);
-        const float n = N.norm();
-        if (boundary || !(n > 0.0f) || !std::isfinite(n)) {
+        if (boundary) {
             return p;
         }
         const auto v = caculate_S(vertex);
-        const Vector3f unit_n = N / n;
-        return p + lambda * (v - unit_n.dot(v) * unit_n);
+        return p + lambda * v;
     };
     for (auto v = vertices.head ; v != nullptr ; v = v->next_node) {
         v->new_pos = calculate_new_pos(v);
